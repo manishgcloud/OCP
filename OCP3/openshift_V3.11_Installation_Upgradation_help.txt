@@ -1,0 +1,647 @@
+https://gist.github.com/camilamacedo86/eed13de4e31aa411dec9daf11f528bcb
+
+yum -y install wget git net-tools bind-utils iptables-services bridge-utils bash-completion kexec-tools sos psacct
+yum -y update
+reboot
+yum -y install openshift-ansible atomic-openshift-clients
+yum -y install docker	OR	yum -y install cri-o
+ssh-keygen -t rsa
+for host in master.openshift.example.com node.openshift.example.com; do ssh-copy-id -i ~/.ssh/id_rsa.pub $host; done
+
+
+Networking:
+------------
+The OpenShift cluster needs to have 2 different network CIDRs defined in order to be able to assign pod and service IPs to its own components as well as the workloads running on it. 
+These two values are the (1) Pod Network CIDR and (2) Service Network CIDR
+
+Pod Network CIDR: osm_cluster_network_cidr=10.128.0.0/14	(provide 262,142 pod IPs)
+Service Network CIDR: openshift_portal_net=172.30.0.0/16	(provide 65,534 IP addresses for services)
+
+
+Create Service Account on registry.redhat.io: https://access.redhat.com/terms-based-registry
+---------------------------------------------
+	export OREG_AUTH_USER='1234567|alice-ocp311-implementation-lab'
+	export OREG_AUTH_PASSWORD='...very long base64 string...'
+	echo "export OREG_AUTH_USER='${OREG_AUTH_USER}'" >> /root/.bashrc
+	echo "export OREG_AUTH_PASSWORD='${OREG_AUTH_PASSWORD}'" >> /root/.bashrc
+
+Login:
+	ssh master1.$GUID.internal -- sudo cat /etc/origin/master/ca.crt >/root/openshift-ca.crt
+	oc login -u alice -p 'r3dh4t1!' loadbalancer.$GUID.example.opentlc.com --certificate-authority=/root/openshift-ca.crt
+
+
+--------------------------------------------------------------------------------
+# cd /etc/sysconfig/
+# ll docker*
+-rw-r--r--. 1 root root 1079 Mar 31 12:45 docker
+-rw-r--r--. 1 root root   69 Mar 31 12:45 docker-network
+-rw-r--r--. 1 root root   52 Mar 31 13:22 docker-storage
+-rw-r--r--. 1 root root   51 Mar 31 09:21 docker-storage-setup
+
+# egrep -v '^#|^$' docker
+OPTIONS=' --selinux-enabled       --signature-verification=False'
+if [ -z "${DOCKER_CERT_PATH}" ]; then
+    DOCKER_CERT_PATH=/etc/docker
+fi
+
+# egrep -v '^#|^$' docker-network 
+DOCKER_NETWORK_OPTIONS=' --mtu=8951'
+
+# egrep -v '^#|^$' docker-storage
+DOCKER_STORAGE_OPTIONS="--storage-driver overlay2 "
+
+# egrep -v '^#|^$' docker-storage-setup 
+DEVS=/dev/xvdb
+VG=docker-vg
+STORAGE_DRIVER=overlay2
+# 
+--------------------------------------------------------------------------------
+subscription-manager repos --disable="*" --enable="rhel-7-server-rpms" --enable="rhel-7-server-extras-rpms" --enable="rhel-7-server-ose-3.11-rpms" --enable="rhel-7-server-ansible-2.9-rpms" --enable="rhel-7-fast-datapath-rpms"
+
+
+repo id                                    repo name                      status
+rh-gluster-3-client-for-rhel-7-server-rpms Red Hat Enterprise Linux Glust    306
+rhel-7-server-ansible-2.9-rpms             Red Hat Enterprise Linux Ansib     25
+rhel-7-server-extras-rpms                  Red Hat Enterprise Linux 7 Ext  1,229
+rhel-7-server-optional-rpms                Red Hat Enterprise Linux 7 Opt 19,636
+rhel-7-server-ose-3.11-rpms                Red Hat Enterprise Linux 7 OSE    818
+rhel-7-server-rh-common-rpms               Red Hat Enterprise Linux 7 Com    239
+rhel-7-server-rpms                         Red Hat Enterprise Linux 7     27,002
+
+
+# rpm -qa |grep -i openshift*		(Repo: rhel-7-server-ose-3.11-rpms)
+atomic-openshift-3.11.154-1.git.0.7a097ad.el7.x86_64
+atomic-openshift-clients-3.11.154-1.git.0.7a097ad.el7.x86_64
+openshift-ansible-docs-3.11.154-2.git.0.1640c49.el7.noarch
+openshift-ansible-roles-3.11.154-2.git.0.1640c49.el7.noarch
+openshift-ansible-3.11.154-2.git.0.1640c49.el7.noarch
+openshift-ansible-playbooks-3.11.154-2.git.0.1640c49.el7.noarch
+
+Check the availability of the atomic-openshift-node package on all nodes:
+	# ansible nodes -m yum -a 'list=atomic-openshift-node'
+
+
+
+
+
+Repo Path: http://admin.na.shared.opentlc.com/repos/ocp
+
+# cat open_ocp-ha-lab.repo 
+[rhel-7-server-rpms]
+name=Red Hat Enterprise Linux 7
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-rpms
+enabled=1
+gpgcheck=0
+
+[rhel-7-server-rh-common-rpms]
+name=Red Hat Enterprise Linux 7 Common
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-rh-common-rpms
+enabled=1
+gpgcheck=0
+
+[rhel-7-server-extras-rpms]
+name=Red Hat Enterprise Linux 7 Extras
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-extras-rpms
+enabled=1
+gpgcheck=0
+
+[rhel-7-server-optional-rpms]
+name=Red Hat Enterprise Linux 7 Optional
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-optional-rpms
+enabled=1
+gpgcheck=0
+
+[rhel-7-server-ose-3.11-rpms]
+name=Red Hat Enterprise Linux 7 OSE 3.11
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-ose-3.11-rpms
+enabled=1
+gpgcheck=0
+
+
+## Required since OCP 3.10
+[rh-gluster-3-client-for-rhel-7-server-rpms]
+name=Red Hat Enterprise Linux GlusterFS Client (RPMs)
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rh-gluster-3-client-for-rhel-7-server-rpms
+enabled=1
+gpgcheck=0
+
+[rhel-7-server-ansible-2.6-rpms]
+name=Red Hat Enterprise Linux Ansible (RPMs)
+baseurl=http://d3s3zqyaz8cp2d.cloudfront.net/repos/ocp/3.11.154/rhel-7-server-ansible-2.6-rpms
+enabled=1
+gpgcheck=0
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+Create Service Account on registry.redhat.io
+Create an Ansible Inventory File
+Verify that Docker is running on all nodes:	# ansible -i /root/inventory/hosts nodes -a 'systemctl is-active docker'
+Deploy Highly Available OpenShift Cluster
+
+tuned-adm active	(Verify on all nodes post deployment)
+
+Add OpenShift Authentication Variables:
+	echo "" >> /root/htpasswd.openshift
+	htpasswd -b /root/htpasswd.openshift test1 'redhat1!'
+	htpasswd -b /root/htpasswd.openshift test2 'redhat1!'
+	htpasswd -b /root/htpasswd.openshift test3 'redhat1!'
+	htpasswd -b /root/htpasswd.openshift test4 'redhat1!'
+
+
+cd /usr/share/ansible/openshift-ansible
+ansible-playbook -i /root/inventory/hosts ./playbooks/prerequisites.yml
+ansible-playbook -f 20 -i /root/inventory/hosts ./playbooks/deploy_cluster.yml
+
+ssh master1.internal -- sudo cat /etc/origin/master/ca.crt >/root/openshift-ca.crt
+oc login -u test1 -p 'redhat1!' loadbalancer.example.com --certificate-authority=/root/openshift-ca.crt
+oc get nodes --show-labels
+
+
+Uninstall:
+ansible-playbook -i /root/inventory/hosts ./playbooks/adhoc/uninstall.yml
+ansible nodes -a "rm -rf /etc/origin"
+ansible nfs -a "rm -rf /srv/nfs/*"
+
+
+
+vi /root/inventory/hosts
+
+[OSEv3:vars]
+timeout=60
+ansible_user=root
+
+# Set openshift_deployment_type
+openshift_deployment_type=openshift-enterprise
+openshift_release=3.11
+
+# disable checks, as we are not a production environment
+openshift_disable_check="disk_availability,memory_availability" 
+
+# Node group definitions 
+openshift_node_groups=[{'name': 'node-config-master', 'labels': ['node-role.kubernetes.io/master=true']}, {'name': 'node-config-infra', 'labels': ['node-role.kubernetes.io/infra=true']}, {'name': 'node-config-compute', 'labels': ['node-role.kubernetes.io/compute=true']}]
+
+# Docker registry credentials for registry.redhat.io 
+oreg_auth_user='{{ lookup("env", "OREG_AUTH_USER") }}'
+oreg_auth_password='{{ lookup("env", "OREG_AUTH_PASSWORD") }}'
+
+# default project node selector 
+osm_default_node_selector='node-role.kubernetes.io/compute=true'
+
+# Enable cockpit 
+osm_use_cockpit=true
+osm_cockpit_plugins=['cockpit-kubernetes']
+
+# Configure additional projects 
+openshift_additional_projects={'my-infra-project-test': {'default_node_selector': 'node-role.kubernetes.io/infra=true'}}
+
+openshift_master_api_port=443  
+openshift_master_console_port=443
+
+openshift_master_cluster_hostname=loadbalancer.internal 
+openshift_master_cluster_public_hostname=loadbalancer.example.com 
+openshift_master_default_subdomain=apps.example.com
+
+# htpasswd auth
+openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 'challenge': 'true', 'kind': 'HTPasswdPasswordIdentityProvider'}] 
+openshift_master_htpasswd_file=/root/htpasswd.openshift 
+
+
+
+# Enable cluster metrics
+openshift_metrics_install_metrics=True 
+
+openshift_metrics_storage_kind=nfs 
+openshift_metrics_storage_access_modes=['ReadWriteOnce'] 
+openshift_metrics_storage_nfs_directory=/srv/nfs  
+openshift_metrics_storage_nfs_options='*(rw,root_squash)' 
+openshift_metrics_storage_volume_name=metrics 
+openshift_metrics_storage_volume_size=10Gi 
+openshift_metrics_storage_labels={'storage': 'metrics'} 
+
+openshift_metrics_cassandra_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+openshift_metrics_hawkular_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+openshift_metrics_heapster_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+
+# Enable cluster logging
+openshift_logging_install_logging=True 
+
+openshift_logging_storage_kind=nfs  
+openshift_logging_storage_access_modes=['ReadWriteOnce']  
+openshift_logging_storage_nfs_directory=/srv/nfs 
+openshift_logging_storage_nfs_options='*(rw,root_squash)' 
+openshift_logging_storage_volume_name=logging 
+openshift_logging_storage_volume_size=10Gi 
+openshift_logging_storage_labels={'storage': 'logging'} 
+
+# openshift_logging_kibana_hostname=kibana.apps.example.com
+openshift_logging_es_cluster_size=1
+openshift_logging_es_memory_limit=8Gi 
+
+openshift_logging_es_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+openshift_logging_kibana_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+openshift_logging_curator_nodeselector={"node-role.kubernetes.io/infra":"true"} 
+
+# Allow use of NFS for logging and metrics 
+openshift_enable_unsupported_configurations=True
+
+# OpenShift Router and Registry Vars
+openshift_router_selector='node-role.kubernetes.io/infra=true' 
+openshift_hosted_router_replicas=2 
+
+openshift_registry_selector='node-role.kubernetes.io/infra=true' 
+openshift_hosted_registry_replicas=1 
+
+openshift_hosted_registry_storage_kind=nfs 
+openshift_hosted_registry_storage_access_modes=['ReadWriteMany']
+openshift_hosted_registry_storage_nfs_directory=/srv/nfs
+openshift_hosted_registry_storage_nfs_options='*(rw,root_squash)'
+openshift_hosted_registry_storage_volume_name=registry
+openshift_hosted_registry_storage_volume_size=20Gi
+
+
+# OpenShift Service Catalog Vars
+openshift_enable_service_catalog=true 
+ansible_service_broker_install=true 
+template_service_broker_install=true 
+openshift_template_service_broker_namespaces=['openshift'] 
+
+
+# OpenShift Cluster Monitoring Operator Vars
+openshift_cluster_monitoring_operator_install=true 
+openshift_cluster_monitoring_operator_node_selector={'node-role.kubernetes.io/infra':'true'} 
+
+
+[OSEv3:children] 
+lb
+nfs
+nodes
+
+[lb] 
+loadbalancer.internal
+
+[nfs] 
+support1.internal
+
+[etcd:children] 
+masters
+
+[nodes:children] 
+masters
+infra
+compute
+
+[masters] 
+master1.internal
+master2.internal
+master3.internal
+
+[masters:vars] 
+openshift_node_group_name='node-config-master'
+
+[infra] 
+infranode1.internal
+infranode2.internal
+
+[infra:vars]
+openshift_node_group_name='node-config-infra'
+
+[compute]
+node1.internal
+node2.internal
+node3.internal
+
+[compute:vars]
+openshift_node_group_name='node-config-compute'
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+1 Ansible control host (control-host.myorg.com)
+	RHEL 7.4 minimal installation
+	16 GB Memory
+	2 Cores
+	40 GB - / (root)
+
+3 Masters (openshift-master-[1-3].c1-ocp.myorg.com)
+	RHEL 7.4 minimal installation
+	24 GB Memory
+	4 Cores
+	10 GB - / (root)
+	10 GB - /home (user home folders)
+	10 GB - /usr (system binaries)
+	10 GB - /var (system drivers and other bits)
+	10 GB - /var/lib/etcd 		(etcd write path. Should be back by a fast disk, SSD or logical volume)
+	50 GB+ - /var/lib/docker	(If using Docker as the container runtime, this is the container image cache formatted, configured, and managed by docker-storage-setup)
+	50 GB+ - /var/lib/containers 	(If using CRI-O as the container runtime, this is the container image cache formatted, configured, and managed by container-storage-setup)
+	50 GB+ - /var/lib/origin  	(Ephemeral/temp storage for running containers. Should be backed by a logical volume.)
+	20 GB+ - /var/log 		(system logging write path)
+	[SWAP] (should be disabled and not partitioned for)
+
+** It is recommended that STORAGE_DRIVER=overlay2 be set in /etc/sysconfig/docker-storage-setup
+** It is recommended that storage_driver=overlay be set in /etc/crio/crio.conf
+
+3 Infrastructure Nodes (openshift-infra[1-3].c1-ocp.myorg.com)
+	RHEL 7.4 minimal installation
+	24 GB Memory
+	6 Cores
+	10 GB - / (root)
+	10 GB - /home (user home folders)
+	10 GB - /usr (system binaries)
+	10 GB - /var (system drivers and other bits)
+	50 GB+ - /var/lib/docker	(If using Docker as the container runtime, this is the container image cache formatted, configured, and managed by docker-storage-setup)
+	50 GB+ - /var/lib/containers 	(If using CRI-O as the container runtime, this is the container image cache formatted, configured, and managed by container-storage-setup)
+	50 GB+ - /var/lib/origin  	(Ephemeral/temp storage for running containers. Should be backed by a logical volume.)
+	20 GB+ - /var/log 		(system logging write path)
+	[SWAP] (should be disabled and not partitioned for)
+
+3 Application Nodes (openshift-node-[1-3].c1-ocp.myorg.com)
+	RHEL 7.6 minimal installation
+	48 GB Memory
+	4 Cores
+	10 GB - / (root)
+	10 GB - /home (user home folders)
+	10 GB - /usr (system binaries)
+	10 GB - /var (system drivers and other bits)
+	100 GB+ - /var/lib/docker	(If using Docker as the container runtime, this is the container image cache formatted, configured, and managed by docker-storage-setup)
+	100 GB+ - /var/lib/containers 	(If using CRI-O as the container runtime, this is the container image cache formatted, configured, and managed by container-storage-setup)
+	50 GB+ - /var/lib/origin  	(Ephemeral/temp storage for running containers. Should be backed by a logical volume.)
+	20 GB+ - /var/log 		(system logging write path)
+	[SWAP] (should be disabled and not partitioned for)
+
+1 Load Balancer host, if you plan to use Option 2 for Load Balancing, per the above section (lb.c1-ocp.myorg.com)
+	2 cores
+	4 GB Memory
+	10 GB root drive	
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+1. Create directories on the support1.internal NFS host to be used as PVs in the OpenShift cluster:
+
+mkdir -p /srv/nfs/user-vols/pv{1..200}
+for pvnum in {1..50} ; do
+echo /srv/nfs/user-vols/pv${pvnum} *(rw,root_squash) >> /etc/exports.d/openshift-uservols.exports
+chown -R nfsnobody.nfsnobody  /srv/nfs
+chmod -R 777 /srv/nfs
+done
+
+2. Create persistent volumes resources by creating files, and then load those files into OpenShift with oc create -f <filename>:
+
+export GUID=`hostname|awk -F. '{print $2}'`
+
+mkdir /root/pvs
+for volume in pv{1..25} ; do
+cat << EOF > /root/pvs/${volume}
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolume",
+  "metadata": {
+    "name": "${volume}"
+  },
+  "spec": {
+    "capacity": {
+        "storage": "5Gi"
+    },
+    "accessModes": [ "ReadWriteOnce" ],
+    "nfs": {
+        "path": "/srv/nfs/user-vols/${volume}",
+        "server": "support1.${GUID}.internal"
+    },
+    "persistentVolumeReclaimPolicy": "Recycle"
+  }
+}
+EOF
+echo "Created def file for ${volume}";
+done;
+
+for volume in pv{26..50} ; do
+cat << EOF > /root/pvs/${volume}
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolume",
+  "metadata": {
+    "name": "${volume}"
+  },
+  "spec": {
+    "capacity": {
+        "storage": "10Gi"
+    },
+    "accessModes": [ "ReadWriteMany" ],
+    "nfs": {
+        "path": "/srv/nfs/user-vols/${volume}",
+        "server": "support1.${GUID}.internal"
+    },
+    "persistentVolumeReclaimPolicy": "Retain"
+  }
+}
+EOF
+echo "Created def file for ${volume}";
+done;
+
+cat /root/pvs/* | oc create -f -
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+Configuring OpenShift Container Platform for vSphere using Ansible: 
+-------------------------------------------------------------------
+	https://docs.openshift.com/container-platform/3.11/install_config/configuring_vsphere.html#vsphere-configuring-masters-ansible_configuring-for-vsphere
+[OSEv3:vars]
+# vSphere Cloud provider
+openshift_cloudprovider_kind=vsphere
+openshift_cloudprovider_vsphere_username="administrator@vsphere.local"
+openshift_cloudprovider_vsphere_password="password"
+openshift_cloudprovider_vsphere_host="vcsa65-dc1.example.com"
+openshift_cloudprovider_vsphere_datacenter=Datacenter
+openshift_cloudprovider_vsphere_cluster=Cluster
+openshift_cloudprovider_vsphere_resource_pool=ResourcePool
+openshift_cloudprovider_vsphere_datastore="datastore"
+openshift_cloudprovider_vsphere_folder="folder"
+
+# Setup vsphere registry storage
+openshift_hosted_registry_storage_kind=vsphere
+openshift_hosted_registry_storage_access_modes=['ReadWriteOnce']
+openshift_hosted_registry_storage_annotations=['volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/vsphere-volume']
+openshift_hosted_registry_replicas=1
+
+openshift_hosted_router_replicas=3
+openshift_master_cluster_method=native
+openshift_node_local_quota_per_fsgroup=512Mi
+
+
+$ ansible-playbook -i <inventory_file> playbooks/deploy_cluster.yml
+
+** Installing with Ansible also creates and configures the following files to fit your vSphere environment:
+	/etc/origin/cloudprovider/vsphere.conf
+	/etc/origin/master/master-config.yaml
+	/etc/origin/node/node-config.yaml
+
+
+Statically Provisioning VMware vSphere volumes
+----------------------------------------------
+vmkfstools -c 40G /vmfs/volumes/DatastoreName/volumes/myDisk.vmdk		(Create using vmkfstools)
+		OR
+shell vmware-vdiskmanager -c -t 0 -s 40GB -a lsilogic myDisk.vmdk		(Create using vmware-vdiskmanager)
+
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+DELETE:
+=======
+oc adm drain va33slvocp014.wellpoint.com --ignore-daemonsets --delete-local-data --force
+oc delete node va33slvocp014.wellpoint.com
+/tmp/terraform plan -destroy -target vsphere_virtual_machine.ocp-node[13]
+/tmp/terraform destroy -target vsphere_virtual_machine.ocp-node[13]
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+UPGRADE
+=======
+
+Openshift Upgrade with In-Place Method:
+=======================================
+oc status --all-namespaces --suggest
+oc version
+oc adm diagnostics
+docker version
+
+Validate OpenShift Container Platform storage migration to ensure potential issues are resolved before the outage window:
+	$ oc adm migrate storage --include=* --loglevel=2 --confirm --config /etc/origin/master/admin.kubeconfig
+
+i. On master hosts, back up the following files:
+	/etc/origin/master/master-config.yaml
+	/etc/origin/master/master.env
+	/etc/origin/master/scheduler.json
+
+ii. On etcd hosts, including masters that have etcd co-located on them, back up the
+	/etc/etcd/etcd.conf
+
+iii. On node hosts, including masters, back up the following files:
+	/etc/origin/node/node-config.yaml
+
+https://access.redhat.com/documentation/en-us/openshift_container_platform/3.11/html-single/day_two_operations_guide/index#etcd-backup_environment-backup
+$ etcdctl2 -v
+$ etcdctl3 version
+
+
+$ ssh master-0		(On All Master Nodes)
+# mkdir -p /backup/etcd-config-$(date +%Y%m%d)/
+# cp -R /etc/etcd/ /backup/etcd-config-$(date +%Y%m%d)/
+
+# etcdctl2 member list
+# etcdctl2 --debug cluster-health
+# etcdctl3 member list
+# etcdctl3 check perf
+# etcdctl3 --cert="/etc/etcd/peer.crt" --key=/etc/etcd/peer.key --cacert="/etc/etcd/ca.crt" --endpoints=[https://master1.aaa5.internal:2379,https://master2.aaa5.internal:2379] endpoint health --debug=true
+# etcdctl3 --cert="/etc/etcd/peer.crt" --key=/etc/etcd/peer.key --cacert="/etc/etcd/ca.crt" --endpoints=[192.168.0.54:2379,192.168.0.87:2379] endpoint health
+
+# systemctl show etcd --property=ActiveState,SubState
+# mkdir -p /var/lib/etcd/backup/etcd-$(date +%Y%m%d)				(You must write the snapshot to a directory under /var/lib/etcd/.)
+# etcdctl3 snapshot save /var/lib/etcd/backup/etcd-$(date +%Y%m%d)/db
+# etcdctl3 snapshot status /var/lib/etcd/backup/etcd-$(date +%Y%m%d)/db
+# etcdctl3 snapshot --write-out=table status /var/lib/etcd/backup/etcd-$(date +%Y%m%d)/db
+
+$ oc get -o yaml --export all > project.yaml
+$ oc get -o json --export all > project.json
+
+$ for object in rolebindings serviceaccounts secrets imagestreamtags cm egressnetworkpolicies rolebindingrestrictions limitranges resourcequotas pvc templates cronjobs statefulsets hpa deployments replicasets poddisruptionbudget endpoints
+do
+  oc get -o yaml --export $object > $object.yaml
+done
+
+$ oc api-resources --namespaced=true -o name
+
+# subscription-manager repos \
+--disable="rhel-7-server-ose-3.10-rpms" \
+--disable="rhel-7-server-ansible-2.4-rpms" \
+--enable="rhel-7-server-ose-3.11-rpms" \
+--enable="rhel-7-server-rpms" \
+--enable="rhel-7-server-extras-rpms" \
+--enable="rhel-7-server-ansible-2.9-rpms"
+# yum clean all
+
+# yum update -y openshift-ansible		(Bastion Host)
+
+** Disable the Cluster Monitoring Operator by adding "openshift_cluster_monitoring_operator_install=false" to your inventory file.
+
+Generate a default bootstrap policy template file:
+	$ oc adm create-bootstrap-policy-file --filename=policy.json
+
+Not Sure - Page12
+	$ oc auth reconcile -f policy.json
+	# oc adm policy reconcile-sccs --additive-only=true --confirm
+
+
+vim /root/ansible/inventory
+	openshift_rolling_restart_mode=system
+	docker_upgrade=false
+# /usr/share/ansible/openshift-ansible
+# ansible-playbook -i /root/ansible/inventory playbooks/byo/openshift-cluster/upgrades/v3_11/upgrade_control_plane.yml
+
+# ansible-playbook -i /root/ansible/inventory playbooks/byo/openshift-cluster/upgrades/v3_11/upgrade_nodes.yml
+
+
+Post Upgrade Verification:
+--------------------------
+oc status
+oc version
+docker version
+rpm -qa |grep -i openshift
+oc adm diagnostics
+oc get nodes -o wide
+oc get pods -n kube-system -o wide
+
+# oc get -n default dc/docker-registry -o json | grep \"image\"
+# oc get -n default dc/router -o json | grep \"image\"
+
+
+
+
+
+
+
+When I run the playbook upgrade_nodes openshift 3.11, some nodes that have pods with PDB get drain stuck and never ends the playbook with error or success.
+
+What I had to do:
+oc adm manage-node nodexxx --schedulable=false
+Look for pods that has PDB:
+oc get pdb --all-namespaces
+oc delete po podxx1 -n xx
+oc delete po podxx2 -n xy
+oc adm drain nodexx --grace-period=20 --ignore-daemonsets --force --delete-local-data --timeout=20s
+oc label --overwrite node nodexx maintenance=true
+sudo ansible-playbook -i inventory.ini /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_11/upgrade_nodes.yml -e openshift_upgrade_nodes_serial="1" -e openshift_upgrade_nodes_label="maintenance=true" -vvvv
+
+Playbook Sucess.
+You can now remove maintenance label from the node.
+
+Sources to understand the problem:
+https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#how-disruption-budgets-work
+https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pdb-example
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
