@@ -6,3 +6,8 @@ https://mirror.openshift.com/pub/openshift-v4/clients/ocp
 https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.3/
 
 https://github.com/openshift/installer/tree/master/upi/vsphere
+
+Path for Vsphere Terraform script
+OCP/OCP4/OCP-4.3.19/installer/upi/vsphere/
+OCP/OCP4/OCP-4.4.3/installer/upi/vsphere/
+
